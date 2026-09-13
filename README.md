@@ -10,7 +10,7 @@
 2. 按周期探测可用性，并检查 HTTPS 证书过期时间
 3. 异常时通过邮件或 Webhook 通知（带去重，避免同一故障刷屏）
 
-当前仓库是 **可运行的骨架**：进程能起来、`/healthz` 可用，目标登记 / 探测 / 告警仍是占位模块（见 [#1](https://github.com/bugman666/open-site-health/issues/1)、[#2](https://github.com/bugman666/open-site-health/issues/2)、[#3](https://github.com/bugman666/open-site-health/issues/3)）。
+当前可以登记并持久化监控 URL（[#1](https://github.com/bugman666/open-site-health/issues/1)）。探测和告警仍是占位模块（见 [#2](https://github.com/bugman666/open-site-health/issues/2)、[#3](https://github.com/bugman666/open-site-health/issues/3)）。
 
 ## 谁会用
 
@@ -51,7 +51,16 @@ docker compose up --build -d
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
-看到 `"status":"ok"` 即表示骨架服务已起来。数据目录挂在 named volume `osh-data`。停止：
+看到 `"status":"ok"` 即表示服务已起来。数据目录挂在 named volume `osh-data`。登记目标：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/targets \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.org"}'
+curl -sS http://127.0.0.1:8080/targets
+```
+
+停止：
 
 ```bash
 docker compose down
@@ -89,8 +98,8 @@ make smoke         # 编译后短时拉起并请求 /healthz
 ```
 cmd/osh/            进程入口
 internal/config/    配置（JSON + 环境变量）
-internal/httpapi/   HTTP：/ 与 /healthz
-internal/targets/   监控目标存储占位（文件 JSON，后续可换 SQLite）  #1
+internal/httpapi/   HTTP：/、/healthz、/targets
+internal/targets/   监控目标存储（文件 JSON，后续可换 SQLite）         #1
 internal/probe/     定时探测占位                                        #2
 internal/alert/     邮件/Webhook + 去重占位                            #3
 configs/            示例配置
@@ -98,14 +107,26 @@ Dockerfile
 docker-compose.yml
 ```
 
-单进程、无外部数据库。目标列表现在落在 `data/targets.json`，给后续 [#1](https://github.com/bugman666/open-site-health/issues/1) 留出可替换的存储边界。
+单进程、无外部数据库。目标列表落在 `data/targets.json`。
+
+### 目标 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/targets` | 列出全部目标（按创建时间，稳定顺序） |
+| `POST` | `/targets` | 登记 URL，body：`{"url":"https://..."}` |
+| `GET` | `/targets/{id}` | 读取单个目标 |
+| `PUT` | `/targets/{id}` | 修改 URL |
+| `DELETE` | `/targets/{id}` | 删除；之后探测循环也不会再读到它 |
+
+URL 必须是带 `http` / `https` 的绝对地址。缺 scheme、空字符串、无法解析的值返回 `400`；规范化后与已有目标相同则返回 `409`。主机名大小写、默认端口、末尾 `/` 会先规范化再比较。
 
 ## 当前进度
 
 MVP 见 [Milestone: MVP](https://github.com/bugman666/open-site-health/milestone/1)：
 
 - [x] 仓库骨架与可复现启动（本 README + Compose）
-- [ ] 登记监控目标（[#1](https://github.com/bugman666/open-site-health/issues/1)）
+- [x] 登记监控目标（[#1](https://github.com/bugman666/open-site-health/issues/1)）
 - [ ] 定时探测（可用性 + 证书）（[#2](https://github.com/bugman666/open-site-health/issues/2)）
 - [ ] 告警（邮件或 Webhook + 去重）（[#3](https://github.com/bugman666/open-site-health/issues/3)）
 
