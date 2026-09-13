@@ -1,7 +1,8 @@
 // Command osh is the Open Site Health process.
 //
-// It loads config, opens the file-backed target store, serves /healthz
-// and /targets, and parks probe/alert stubs until issues #2 and #3.
+// It loads config, opens the file-backed target and probe stores, serves
+// /healthz, /targets and /probes, and runs the probe scheduler. Alert
+// delivery stays a stub until issue #3.
 package main
 
 import (
@@ -32,17 +33,22 @@ func main() {
 		log.Fatalf("targets: %v", err)
 	}
 
+	results, err := probe.OpenResults(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("probes: %v", err)
+	}
+
 	alerts := alert.New(cfg)
 	alerts.LogStub()
 
-	scheduler := probe.New(cfg, store, alerts)
+	scheduler := probe.New(cfg, store, results, alerts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go scheduler.Start(ctx)
 
-	srv := httpapi.New(cfg, store, alerts)
+	srv := httpapi.New(cfg, store, results, alerts)
 	if err := srv.ListenAndServe(ctx); err != nil {
 		log.Fatalf("http: %v", err)
 	}

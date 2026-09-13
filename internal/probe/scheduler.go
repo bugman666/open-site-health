@@ -1,14 +1,15 @@
-// Package probe is the scheduled HTTP(S) + TLS certificate check placeholder.
+// Package probe runs scheduled HTTP(S) availability and TLS expiry checks.
 //
-// TODO(#2): on each tick, list targets, probe availability (timeout / 5xx → down,
-// 2xx → up), inspect certificate expiry (warn vs expired, distinct from down),
-// and persist results so they can be queried.
+// Each pass lists registered targets, records up/down independently of
+// certificate ok/warn/expired, and keeps a recent result history so the
+// HTTP API can query it. Notifications stay with the alert stub (#3).
 package probe
 
 import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/bugman666/open-site-health/internal/alert"
@@ -16,62 +17,127 @@ import (
 	"github.com/bugman666/open-site-health/internal/targets"
 )
 
-// ErrNotImplemented is returned by CheckAll until #2 is done.
-var ErrNotImplemented = errors.New("probe: HTTP(S) and TLS checks not implemented yet; see issue #2")
+const maxConcurrentProbes = 8
 
-// Availability is the connectivity outcome of one probe.
-type Availability string
-
-const (
-	Up   Availability = "up"
-	Down Availability = "down"
-)
-
-// CertStatus is independent of Availability so a live site with an
-// expiring certificate is not reported as down.
-type CertStatus string
-
-const (
-	CertOK      CertStatus = "ok"
-	CertWarn    CertStatus = "warn"
-	CertExpired CertStatus = "expired"
-	CertNA      CertStatus = "n/a"
-)
-
-// Result is one check against one target. Not produced yet.
-type Result struct {
-	TargetID     string
-	URL          string
-	CheckedAt    time.Time
-	Availability Availability
-	CertStatus   CertStatus
-	Message      string
-}
-
-// Scheduler will own the probe ticker. The stub only logs the configured
-// interval so the process stays up without hitting the network.
+// Scheduler owns the probe ticker and writes results to a ResultStore.
 type Scheduler struct {
-	cfg    config.Config
-	store  *targets.Store
-	alerts *alert.Dispatcher
+	cfg     config.Config
+	store   *targets.Store
+	results *ResultStore
+	alerts  *alert.Dispatcher
+	// Timeout overrides the 10s per-target HTTP timeout. Tests set a
+	// shorter value so downtime cases do not wait on the default.
+	Timeout time.Duration
 }
 
-// New wires the pieces that #2 will use.
-func New(cfg config.Config, store *targets.Store, alerts *alert.Dispatcher) *Scheduler {
-	return &Scheduler{cfg: cfg, store: store, alerts: alerts}
+// New wires config, the target list, the result store, and the alert hook.
+func New(cfg config.Config, store *targets.Store, results *ResultStore, alerts *alert.Dispatcher) *Scheduler {
+	return &Scheduler{cfg: cfg, store: store, results: results, alerts: alerts}
 }
 
-// Start keeps the process alive and records that probing is still a stub.
-// Default interval is 5m, matching the documented 50–200 URL load.
+// Results exposes the backing store for HTTP handlers and tests.
+func (s *Scheduler) Results() *ResultStore {
+	return s.results
+}
+
+// Start probes immediately, then again on every configured interval
+// until ctx is cancelled. Default interval is 5m.
 func (s *Scheduler) Start(ctx context.Context) {
-	log.Printf("probe stub idle: interval=%s tls_warn_days=%d (see #2)", s.cfg.ProbeInterval, s.cfg.TLSWarnDays)
-	<-ctx.Done()
+	log.Printf("probe started: interval=%s tls_warn_days=%d", s.cfg.ProbeInterval, s.cfg.TLSWarnDays)
+	ticker := time.NewTicker(s.cfg.ProbeInterval)
+	defer ticker.Stop()
+
+	if ctx.Err() == nil {
+		s.runPass(ctx)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("probe stopped")
+			return
+		case <-ticker.C:
+			s.runPass(ctx)
+		}
+	}
 }
 
-// CheckAll will run one probe pass over every registered target.
-//
-// TODO(#2): implement HTTP(S) GET with timeout, TLS expiry vs cfg.TLSWarnDays,
-// store results, and call alerts.Notify on state changes.
-func (s *Scheduler) CheckAll(_ context.Context) error {
-	return ErrNotImplemented
+func (s *Scheduler) runPass(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err := s.CheckAll(ctx); err != nil {
+		log.Printf("probe pass: %v", err)
+	}
+}
+
+// CheckAll runs one probe pass over every registered target and
+// persists a Result for each. A failure against one URL does not
+// skip the rest.
+func (s *Scheduler) CheckAll(ctx context.Context) error {
+	if s.store == nil {
+		return errors.New("probe: target store is nil")
+	}
+	if s.results == nil {
+		return errors.New("probe: result store is nil")
+	}
+
+	list, err := s.store.List()
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return nil
+	}
+
+	sem := make(chan struct{}, maxConcurrentProbes)
+	var wg sync.WaitGroup
+	for _, t := range list {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t targets.Target) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			r := s.checkOne(ctx, t)
+			if _, err := s.results.Append(r); err != nil {
+				log.Printf("probe: persist %s: %v", t.ID, err)
+				return
+			}
+			s.maybeNotify(ctx, r)
+		}(t)
+	}
+	wg.Wait()
+	return nil
+}
+
+func (s *Scheduler) maybeNotify(ctx context.Context, r Result) {
+	if s.alerts == nil {
+		return
+	}
+	var kind alert.Kind
+	switch {
+	case r.Availability == Down:
+		kind = alert.KindDown
+	case r.CertStatus == CertExpired:
+		kind = alert.KindCertExpired
+	case r.CertStatus == CertWarn:
+		kind = alert.KindCertWarn
+	default:
+		return
+	}
+	ev := alert.Event{
+		TargetID: r.TargetID,
+		URL:      r.URL,
+		Kind:     kind,
+		Message:  r.Message,
+	}
+	if err := s.alerts.Notify(ctx, ev); err != nil && !errors.Is(err, alert.ErrNotImplemented) {
+		log.Printf("probe: alert: %v", err)
+	}
 }

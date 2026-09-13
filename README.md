@@ -10,7 +10,7 @@
 2. 按周期探测可用性，并检查 HTTPS 证书过期时间
 3. 异常时通过邮件或 Webhook 通知（带去重，避免同一故障刷屏）
 
-当前可以登记并持久化监控 URL（[#1](https://github.com/bugman666/open-site-health/issues/1)）。探测和告警仍是占位模块（见 [#2](https://github.com/bugman666/open-site-health/issues/2)、[#3](https://github.com/bugman666/open-site-health/issues/3)）。
+当前可以登记监控 URL，并按周期探测可用性与证书（[#1](https://github.com/bugman666/open-site-health/issues/1)、[#2](https://github.com/bugman666/open-site-health/issues/2)）。告警仍是占位模块（[#3](https://github.com/bugman666/open-site-health/issues/3)）。
 
 ## 谁会用
 
@@ -51,13 +51,14 @@ docker compose up --build -d
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
-看到 `"status":"ok"` 即表示服务已起来。数据目录挂在 named volume `osh-data`。登记目标：
+看到 `"status":"ok"` 即表示服务已起来。数据目录挂在 named volume `osh-data`。登记目标后，进程会按 `OSH_PROBE_INTERVAL`（默认 5 分钟）探测；也可立刻查历史（还没跑完一轮则列表为空）：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/targets \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.org"}'
 curl -sS http://127.0.0.1:8080/targets
+curl -sS http://127.0.0.1:8080/probes
 ```
 
 停止：
@@ -76,7 +77,7 @@ cd open-site-health
 make test          # 单元测试
 make run           # 默认监听 :8080
 # 或
-make smoke         # 编译后短时拉起，检查 /healthz 和目标登记
+make smoke         # 编译后短时拉起，检查 /healthz、目标登记和一轮探测
 ```
 
 常用环境变量（覆盖 `configs/config.example.json`）：
@@ -91,23 +92,23 @@ make smoke         # 编译后短时拉起，检查 /healthz 和目标登记
 | `OSH_WEBHOOK_URL` | Webhook（#3 才会用到） | 空 |
 | `OSH_ALERT_COOLDOWN` | 告警冷却 | `1h` |
 
-配置文件里也可以写 SMTP 字段；骨架阶段不会发信。
+配置文件里也可以写 SMTP 字段；告警投递要等 #3，现在不会发信。探测超时固定 10 秒；HTTPS 会跳过证书校验以便单独标出临期/过期，不把坏证书当成宕机。
 
 ## 仓库结构
 
 ```
 cmd/osh/            进程入口
 internal/config/    配置（JSON + 环境变量）
-internal/httpapi/   HTTP：/、/healthz、/targets
+internal/httpapi/   HTTP：/、/healthz、/targets、/probes
 internal/targets/   监控目标存储（文件 JSON，后续可换 SQLite）         #1
-internal/probe/     定时探测占位                                        #2
+internal/probe/     定时探测（可用性 + 证书）与近期结果               #2
 internal/alert/     邮件/Webhook + 去重占位                            #3
 configs/            示例配置
 Dockerfile
 docker-compose.yml
 ```
 
-单进程、无外部数据库。目标列表落在 `data/targets.json`。
+单进程、无外部数据库。目标列表落在 `data/targets.json`，近期探测记录落在 `data/probes.json`（每个目标最多保留 50 条）。
 
 ### 目标 API
 
@@ -121,13 +122,25 @@ docker-compose.yml
 
 URL 必须是带 `http` / `https` 的绝对地址。缺 scheme、空字符串、无法解析的值返回 `400`；规范化后与已有目标相同则返回 `409`。主机名大小写、默认端口、末尾 `/` 会先规范化再比较。
 
+### 探测 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/targets/{id}/probes` | 该目标的近期记录（新→旧） |
+| `GET` | `/targets/{id}/status` | 最近一次探测；还没有记录则 `404` |
+| `GET` | `/probes` | 全局近期记录；`?target_id=`、`?limit=` |
+
+每条记录带 `checked_at`、`availability`（`up` / `down`）、`cert_status`（`ok` / `warn` / `expired` / `n/a`）。纯 HTTP 目标的证书字段是 `n/a`。
+
+约定：最终状态 2xx/3xx 为 `up`；超时、连接失败、4xx、5xx 为 `down`。证书状态与连通性分开：站点可达但证书 14 天内到期是 `up` + `warn`，证书已过期是 `up` + `expired`（探测时不因证书校验失败而当成宕机）。
+
 ## 当前进度
 
 MVP 见 [Milestone: MVP](https://github.com/bugman666/open-site-health/milestone/1)：
 
 - [x] 仓库骨架与可复现启动（本 README + Compose）
 - [x] 登记监控目标（[#1](https://github.com/bugman666/open-site-health/issues/1)）
-- [ ] 定时探测（可用性 + 证书）（[#2](https://github.com/bugman666/open-site-health/issues/2)）
+- [x] 定时探测（可用性 + 证书）（[#2](https://github.com/bugman666/open-site-health/issues/2)）
 - [ ] 告警（邮件或 Webhook + 去重）（[#3](https://github.com/bugman666/open-site-health/issues/3)）
 
 本项目免费、可自托管，不设付费墙。

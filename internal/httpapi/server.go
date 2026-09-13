@@ -1,4 +1,4 @@
-// Package httpapi serves process health and the target registry API.
+// Package httpapi serves process health, the target registry, and probe results.
 package httpapi
 
 import (
@@ -8,24 +8,27 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/bugman666/open-site-health/internal/alert"
 	"github.com/bugman666/open-site-health/internal/config"
+	"github.com/bugman666/open-site-health/internal/probe"
 	"github.com/bugman666/open-site-health/internal/targets"
 )
 
 // Server is the HTTP front door of the process.
 type Server struct {
-	cfg    config.Config
-	store  *targets.Store
-	alerts *alert.Dispatcher
-	mux    *http.ServeMux
+	cfg     config.Config
+	store   *targets.Store
+	results *probe.ResultStore
+	alerts  *alert.Dispatcher
+	mux     *http.ServeMux
 }
 
-// New registers health and target CRUD routes.
-func New(cfg config.Config, store *targets.Store, alerts *alert.Dispatcher) *Server {
-	s := &Server{cfg: cfg, store: store, alerts: alerts, mux: http.NewServeMux()}
+// New registers health, target CRUD, and probe query routes.
+func New(cfg config.Config, store *targets.Store, results *probe.ResultStore, alerts *alert.Dispatcher) *Server {
+	s := &Server{cfg: cfg, store: store, results: results, alerts: alerts, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /", s.handleRoot)
 	s.mux.HandleFunc("GET /targets", s.handleListTargets)
@@ -33,6 +36,9 @@ func New(cfg config.Config, store *targets.Store, alerts *alert.Dispatcher) *Ser
 	s.mux.HandleFunc("GET /targets/{id}", s.handleGetTarget)
 	s.mux.HandleFunc("PUT /targets/{id}", s.handleUpdateTarget)
 	s.mux.HandleFunc("DELETE /targets/{id}", s.handleDeleteTarget)
+	s.mux.HandleFunc("GET /targets/{id}/probes", s.handleTargetProbes)
+	s.mux.HandleFunc("GET /targets/{id}/status", s.handleTargetStatus)
+	s.mux.HandleFunc("GET /probes", s.handleListProbes)
 	return s
 }
 
@@ -92,6 +98,10 @@ type targetListResponse struct {
 	Targets []targets.Target `json:"targets"`
 }
 
+type probeListResponse struct {
+	Results []probe.Result `json:"results"`
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	if _, err := s.store.List(); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{
@@ -99,10 +109,22 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		})
 		return
 	}
+	if s.results != nil {
+		if _, err := s.results.ListRecent(1); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, errorBody{
+				Error: err.Error(),
+			})
+			return
+		}
+	}
 
 	alertState := "stub"
 	if s.alerts != nil && s.alerts.Ready() {
 		alertState = "stub_configured"
+	}
+	probeState := "ok"
+	if s.results == nil {
+		probeState = "stub"
 	}
 
 	writeJSON(w, http.StatusOK, healthResponse{
@@ -110,7 +132,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		Service: "open-site-health",
 		Modules: map[string]string{
 			"targets": "ok",
-			"probe":   "stub",     // TODO(#2)
+			"probe":   probeState,
 			"alert":   alertState, // TODO(#3)
 		},
 		Store: s.store.Path(),
@@ -126,6 +148,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"service": "open-site-health",
 		"health":  "/healthz",
 		"targets": "/targets",
+		"probes":  "/probes",
 		"docs":    "https://github.com/bugman666/open-site-health",
 	})
 }
@@ -183,6 +206,86 @@ func (s *Server) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleTargetProbes(w http.ResponseWriter, r *http.Request) {
+	if s.results == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "probe store unavailable"})
+		return
+	}
+	id := r.PathValue("id")
+	if _, err := s.store.Get(id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	list, err := s.results.ListByTarget(id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: err.Error()})
+		return
+	}
+	if list == nil {
+		list = []probe.Result{}
+	}
+	writeJSON(w, http.StatusOK, probeListResponse{Results: list})
+}
+
+func (s *Server) handleTargetStatus(w http.ResponseWriter, r *http.Request) {
+	if s.results == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "probe store unavailable"})
+		return
+	}
+	id := r.PathValue("id")
+	if _, err := s.store.Get(id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	got, err := s.results.Latest(id)
+	if err != nil {
+		if errors.Is(err, probe.ErrNoResults) {
+			writeJSON(w, http.StatusNotFound, errorBody{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+func (s *Server) handleListProbes(w http.ResponseWriter, r *http.Request) {
+	if s.results == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "probe store unavailable"})
+		return
+	}
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			writeJSON(w, http.StatusBadRequest, errorBody{Error: "limit must be a positive integer"})
+			return
+		}
+		limit = n
+	}
+
+	var (
+		list []probe.Result
+		err  error
+	)
+	if id := r.URL.Query().Get("target_id"); id != "" {
+		list, err = s.results.ListByTarget(id)
+	} else {
+		list, err = s.results.ListRecent(limit)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorBody{Error: err.Error()})
+		return
+	}
+	if list == nil {
+		list = []probe.Result{}
+	}
+	if len(list) > limit {
+		list = list[:limit]
+	}
+	writeJSON(w, http.StatusOK, probeListResponse{Results: list})
+}
+
 func readTargetRequest(w http.ResponseWriter, r *http.Request) (targetRequest, bool) {
 	defer r.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -205,6 +308,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, targets.ErrDuplicate):
 		writeJSON(w, http.StatusConflict, errorBody{Error: err.Error()})
 	case errors.Is(err, targets.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, errorBody{Error: err.Error()})
+	case errors.Is(err, probe.ErrNoResults):
 		writeJSON(w, http.StatusNotFound, errorBody{Error: err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, errorBody{Error: err.Error()})
