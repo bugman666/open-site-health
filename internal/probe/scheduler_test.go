@@ -57,6 +57,7 @@ func newAlertingScheduler(t *testing.T, cfg config.Config) (*Scheduler, *targets
 	if cfg.Listen == "" {
 		cfg = config.Defaults()
 	}
+	cfg.AllowPrivateTargets = true
 	cfg.Alert.WebhookURL = hook.URL
 	if cfg.Alert.Cooldown == 0 {
 		cfg.Alert.Cooldown = time.Hour
@@ -66,6 +67,7 @@ func newAlertingScheduler(t *testing.T, cfg config.Config) (*Scheduler, *targets
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.AllowPrivate = true
 	results, err := OpenResults(dir)
 	if err != nil {
 		t.Fatal(err)

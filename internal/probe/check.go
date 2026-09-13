@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bugman666/open-site-health/internal/safeurl"
 	"github.com/bugman666/open-site-health/internal/targets"
 )
 
@@ -41,6 +42,12 @@ func (s *Scheduler) checkOne(ctx context.Context, t targets.Target) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if err := safeurl.Validate(t.URL, s.cfg.AllowPrivateTargets); err != nil {
+		r.Availability = Down
+		r.Message = err.Error()
+		return r
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.URL, nil)
 	if err != nil {
 		r.Availability = Down
@@ -49,13 +56,21 @@ func (s *Scheduler) checkOne(ctx context.Context, t targets.Target) Result {
 	}
 	req.Header.Set("User-Agent", userAgent)
 
+	dialer := &net.Dialer{Timeout: timeout}
 	client := &http.Client{
 		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return safeurl.ValidateURL(req.URL, s.cfg.AllowPrivateTargets)
+		},
 		Transport: &http.Transport{
 			// Skip verify so an expired or untrusted leaf is still readable
 			// and is classified as a cert problem, not as downtime.
 			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 			DisableKeepAlives: true,
+			DialContext:       safeurl.RestrictedDialContext(dialer, s.cfg.AllowPrivateTargets),
 		},
 	}
 
@@ -98,22 +113,21 @@ func (s *Scheduler) lookupCert(ctx context.Context, rawURL string, now time.Time
 	if u.Port() == "" {
 		host = net.JoinHostPort(u.Hostname(), "443")
 	}
-	dialer := &tls.Dialer{
-		Config: &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec
-			ServerName:         u.Hostname(),
-		},
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", host)
+	netDial := safeurl.RestrictedDialContext(&net.Dialer{}, s.cfg.AllowPrivateTargets)
+	raw, err := netDial(ctx, "tcp", host)
 	if err != nil {
 		return CertNA, nil
 	}
-	defer conn.Close()
 
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
+	tlsConn := tls.Client(raw, &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec
+		ServerName:         u.Hostname(),
+	})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
 		return CertNA, nil
 	}
+	defer tlsConn.Close()
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		return CertNA, nil

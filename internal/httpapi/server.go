@@ -3,12 +3,14 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bugman666/open-site-health/internal/alert"
@@ -42,22 +44,63 @@ func New(cfg config.Config, store *targets.Store, results *probe.ResultStore, al
 	return s
 }
 
-// Handler exposes the mux for tests.
+// Handler exposes the mux for tests, with auth applied to sensitive routes.
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if needsAuth(r.URL.Path) && !s.authorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="open-site-health"`)
+			writeJSON(w, http.StatusUnauthorized, errorBody{Error: "unauthorized"})
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+	})
+}
+
+func needsAuth(path string) bool {
+	return path == "/targets" || path == "/probes" ||
+		strings.HasPrefix(path, "/targets/") || strings.HasPrefix(path, "/probes/")
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	want := s.cfg.APIToken
+	if want == "" {
+		return true
+	}
+	got := requestToken(r)
+	if len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func requestToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); h != "" {
+		const prefix = "Bearer "
+		if len(h) >= len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) {
+			return strings.TrimSpace(h[len(prefix):])
+		}
+	}
+	if t := strings.TrimSpace(r.Header.Get("X-API-Key")); t != "" {
+		return t
+	}
+	return ""
 }
 
 // ListenAndServe starts the HTTP server and shuts it down when ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	httpSrv := &http.Server{
 		Addr:              s.cfg.Listen,
-		Handler:           s.mux,
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("http listening on %s", s.cfg.Listen)
+		if s.cfg.APIToken != "" {
+			log.Printf("http listening on %s (API token required for /targets and /probes)", s.cfg.Listen)
+		} else {
+			log.Printf("http listening on %s (no API token; loopback-only trust)", s.cfg.Listen)
+		}
 		errCh <- httpSrv.ListenAndServe()
 	}()
 

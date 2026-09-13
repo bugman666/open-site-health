@@ -1,8 +1,10 @@
 {
-  "listen": ":8080",
+  "listen": "127.0.0.1:8080",
   "data_dir": "./data",
   "probe_interval": "5m",
   "tls_warn_days": 14,
+  "api_token": "",
+  "allow_private_targets": false,
   "alert": {
     "webhook_url": "",
     "smtp_host": "",

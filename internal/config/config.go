@@ -4,13 +4,15 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
-	DefaultListen        = ":8080"
+	DefaultListen        = "127.0.0.1:8080"
 	DefaultDataDir       = "./data"
 	DefaultProbeInterval = 5 * time.Minute
 	DefaultTLSWarnDays   = 14
@@ -20,11 +22,13 @@ const (
 
 // Config is the runtime configuration for the service.
 type Config struct {
-	Listen        string
-	DataDir       string
-	ProbeInterval time.Duration
-	TLSWarnDays   int
-	Alert         Alert
+	Listen              string
+	DataDir             string
+	ProbeInterval       time.Duration
+	TLSWarnDays         int
+	APIToken            string
+	AllowPrivateTargets bool
+	Alert               Alert
 }
 
 // Alert holds notification settings for webhook and optional SMTP.
@@ -40,11 +44,13 @@ type Alert struct {
 }
 
 type fileConfig struct {
-	Listen        string    `json:"listen"`
-	DataDir       string    `json:"data_dir"`
-	ProbeInterval string    `json:"probe_interval"`
-	TLSWarnDays   int       `json:"tls_warn_days"`
-	Alert         fileAlert `json:"alert"`
+	Listen              string    `json:"listen"`
+	DataDir             string    `json:"data_dir"`
+	ProbeInterval       string    `json:"probe_interval"`
+	TLSWarnDays         int       `json:"tls_warn_days"`
+	APIToken            string    `json:"api_token"`
+	AllowPrivateTargets bool      `json:"allow_private_targets"`
+	Alert               fileAlert `json:"alert"`
 }
 
 type fileAlert struct {
@@ -77,6 +83,7 @@ func Defaults() Config {
 // when that file exists. Environment variables override file values:
 //
 //	OSH_LISTEN, OSH_DATA_DIR, OSH_PROBE_INTERVAL, OSH_TLS_WARN_DAYS,
+//	OSH_API_TOKEN, OSH_ALLOW_PRIVATE_TARGETS,
 //	OSH_WEBHOOK_URL, OSH_ALERT_COOLDOWN, OSH_SMTP_HOST, OSH_SMTP_PORT,
 //	OSH_SMTP_USER, OSH_SMTP_PASSWORD, OSH_SMTP_FROM, OSH_ALERT_TO
 func Load() (Config, error) {
@@ -127,6 +134,12 @@ func loadFile(path string, cfg *Config) error {
 	}
 	if fc.TLSWarnDays != 0 {
 		cfg.TLSWarnDays = fc.TLSWarnDays
+	}
+	if fc.APIToken != "" {
+		cfg.APIToken = fc.APIToken
+	}
+	if fc.AllowPrivateTargets {
+		cfg.AllowPrivateTargets = true
 	}
 	if fc.Alert.WebhookURL != "" {
 		cfg.Alert.WebhookURL = fc.Alert.WebhookURL
@@ -180,6 +193,16 @@ func applyEnv(cfg *Config) error {
 		}
 		cfg.TLSWarnDays = n
 	}
+	if v, ok := os.LookupEnv("OSH_API_TOKEN"); ok {
+		cfg.APIToken = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("OSH_ALLOW_PRIVATE_TARGETS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("OSH_ALLOW_PRIVATE_TARGETS: %w", err)
+		}
+		cfg.AllowPrivateTargets = b
+	}
 	if v := os.Getenv("OSH_WEBHOOK_URL"); v != "" {
 		cfg.Alert.WebhookURL = v
 	}
@@ -232,5 +255,25 @@ func (c Config) Validate() error {
 	if c.Alert.Cooldown < 0 {
 		return fmt.Errorf("alert.cooldown must be >= 0")
 	}
+	if strings.TrimSpace(c.APIToken) == "" && !ListenIsLoopback(c.Listen) {
+		return fmt.Errorf("api_token is required unless listen is loopback (127.0.0.1 / ::1 / localhost); set OSH_API_TOKEN or bind to localhost")
+	}
 	return nil
+}
+
+// ListenIsLoopback reports whether addr only accepts local clients.
+// ":8080" and "0.0.0.0:8080" are not loopback.
+func ListenIsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

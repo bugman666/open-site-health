@@ -4,13 +4,17 @@ services:
     image: open-site-health:local
     container_name: open-site-health
     ports:
-      - "8080:8080"
+      # Host bind is loopback so the published port is not on all NICs.
+      # The process still listens on :8080 inside the container, so set
+      # OSH_API_TOKEN (required for a non-loopback listen address).
+      - "127.0.0.1:8080:8080"
     environment:
       OSH_LISTEN: ":8080"
       OSH_DATA_DIR: /data
       # 5 minutes matches the documented 50–200 URL starting load.
       OSH_PROBE_INTERVAL: "5m"
       OSH_TLS_WARN_DAYS: "14"
+      OSH_API_TOKEN: ${OSH_API_TOKEN:?set OSH_API_TOKEN before compose up; see README}
     volumes:
       - osh-data:/data
     restart: unless-stopped

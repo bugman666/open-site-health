@@ -25,11 +25,13 @@ func newTestScheduler(t *testing.T, cfg config.Config) (*Scheduler, *targets.Sto
 	if cfg.Listen == "" {
 		cfg = config.Defaults()
 	}
+	cfg.AllowPrivateTargets = true
 	dir := t.TempDir()
 	store, err := targets.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.AllowPrivate = true
 	results, err := OpenResults(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -297,5 +299,48 @@ func TestCheckAllEmptyStore(t *testing.T) {
 	s, _, _ := newTestScheduler(t, config.Defaults())
 	if err := s.CheckAll(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProbeRefusesBlockedDestination(t *testing.T) {
+	s, store, results := newTestScheduler(t, config.Defaults())
+	tgt := mustAdd(t, store, "http://169.254.169.254/latest/meta-data/")
+	s.cfg.AllowPrivateTargets = false
+
+	start := time.Now()
+	if err := s.CheckAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("blocked destination should not wait on the network")
+	}
+	got := mustLatest(t, results, tgt.ID)
+	if got.Availability != Down {
+		t.Fatalf("availability: %s", got.Availability)
+	}
+	if got.HTTPStatus != 0 {
+		t.Fatalf("should not have fetched metadata: %#v", got)
+	}
+	if got.Message == "" {
+		t.Fatal("expected blocked-destination message")
+	}
+}
+
+func TestProbeRefusesPrivateEvenIfAlreadyStored(t *testing.T) {
+	s, store, results := newTestScheduler(t, config.Defaults())
+	srv := httptest.NewServer(okHandler())
+	t.Cleanup(srv.Close)
+	tgt := mustAdd(t, store, srv.URL)
+
+	s.cfg.AllowPrivateTargets = false
+	if err := s.CheckAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := mustLatest(t, results, tgt.ID)
+	if got.Availability != Down {
+		t.Fatalf("availability: %s (%s)", got.Availability, got.Message)
+	}
+	if got.HTTPStatus == http.StatusOK {
+		t.Fatalf("must not fetch a private listener: %#v", got)
 	}
 }
