@@ -19,8 +19,6 @@ const (
 )
 
 // Config is the runtime configuration for the service.
-// Alert fields are accepted now so #3 can fill them in without
-// reshaping the file.
 type Config struct {
 	Listen        string
 	DataDir       string
@@ -29,12 +27,13 @@ type Config struct {
 	Alert         Alert
 }
 
-// Alert holds notification settings. Delivery is not implemented yet (see #3).
+// Alert holds notification settings for webhook and optional SMTP.
 type Alert struct {
 	WebhookURL string
 	SMTPHost   string
 	SMTPPort   int
 	SMTPUser   string
+	SMTPPass   string
 	SMTPFrom   string
 	To         string
 	Cooldown   time.Duration
@@ -53,6 +52,7 @@ type fileAlert struct {
 	SMTPHost   string `json:"smtp_host"`
 	SMTPPort   int    `json:"smtp_port"`
 	SMTPUser   string `json:"smtp_user"`
+	SMTPPass   string `json:"smtp_password"`
 	SMTPFrom   string `json:"smtp_from"`
 	To         string `json:"to"`
 	Cooldown   string `json:"cooldown"`
@@ -77,7 +77,8 @@ func Defaults() Config {
 // when that file exists. Environment variables override file values:
 //
 //	OSH_LISTEN, OSH_DATA_DIR, OSH_PROBE_INTERVAL, OSH_TLS_WARN_DAYS,
-//	OSH_WEBHOOK_URL, OSH_ALERT_COOLDOWN
+//	OSH_WEBHOOK_URL, OSH_ALERT_COOLDOWN, OSH_SMTP_HOST, OSH_SMTP_PORT,
+//	OSH_SMTP_USER, OSH_SMTP_PASSWORD, OSH_SMTP_FROM, OSH_ALERT_TO
 func Load() (Config, error) {
 	cfg := Defaults()
 
@@ -139,6 +140,9 @@ func loadFile(path string, cfg *Config) error {
 	if fc.Alert.SMTPUser != "" {
 		cfg.Alert.SMTPUser = fc.Alert.SMTPUser
 	}
+	if fc.Alert.SMTPPass != "" {
+		cfg.Alert.SMTPPass = fc.Alert.SMTPPass
+	}
 	if fc.Alert.SMTPFrom != "" {
 		cfg.Alert.SMTPFrom = fc.Alert.SMTPFrom
 	}
@@ -185,6 +189,28 @@ func applyEnv(cfg *Config) error {
 			return fmt.Errorf("OSH_ALERT_COOLDOWN: %w", err)
 		}
 		cfg.Alert.Cooldown = d
+	}
+	if v := os.Getenv("OSH_SMTP_HOST"); v != "" {
+		cfg.Alert.SMTPHost = v
+	}
+	if v := os.Getenv("OSH_SMTP_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("OSH_SMTP_PORT: %w", err)
+		}
+		cfg.Alert.SMTPPort = n
+	}
+	if v := os.Getenv("OSH_SMTP_USER"); v != "" {
+		cfg.Alert.SMTPUser = v
+	}
+	if v := os.Getenv("OSH_SMTP_PASSWORD"); v != "" {
+		cfg.Alert.SMTPPass = v
+	}
+	if v := os.Getenv("OSH_SMTP_FROM"); v != "" {
+		cfg.Alert.SMTPFrom = v
+	}
+	if v := os.Getenv("OSH_ALERT_TO"); v != "" {
+		cfg.Alert.To = v
 	}
 	return nil
 }

@@ -118,9 +118,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	alertState := "stub"
+	alertState := "disabled"
 	if s.alerts != nil && s.alerts.Ready() {
-		alertState = "stub_configured"
+		alertState = "ok"
 	}
 	probeState := "ok"
 	if s.results == nil {
@@ -133,7 +133,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		Modules: map[string]string{
 			"targets": "ok",
 			"probe":   probeState,
-			"alert":   alertState, // TODO(#3)
+			"alert":   alertState,
 		},
 		Store: s.store.Path(),
 	})

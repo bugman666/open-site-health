@@ -10,7 +10,7 @@
 2. 按周期探测可用性，并检查 HTTPS 证书过期时间
 3. 异常时通过邮件或 Webhook 通知（带去重，避免同一故障刷屏）
 
-当前可以登记监控 URL，并按周期探测可用性与证书（[#1](https://github.com/bugman666/open-site-health/issues/1)、[#2](https://github.com/bugman666/open-site-health/issues/2)）。告警仍是占位模块（[#3](https://github.com/bugman666/open-site-health/issues/3)）。
+当前可以登记监控 URL、按周期探测可用性与证书，并在宕机或证书异常时发 Webhook / 邮件（带冷却去重）（[#1](https://github.com/bugman666/open-site-health/issues/1)、[#2](https://github.com/bugman666/open-site-health/issues/2)、[#3](https://github.com/bugman666/open-site-health/issues/3)）。
 
 ## 谁会用
 
@@ -89,10 +89,16 @@ make smoke         # 编译后短时拉起，检查 /healthz、目标登记和�
 | `OSH_DATA_DIR` | 目标列表等本地数据 | `./data` |
 | `OSH_PROBE_INTERVAL` | 探测周期（Go duration） | `5m` |
 | `OSH_TLS_WARN_DAYS` | 证书临期天数 | `14` |
-| `OSH_WEBHOOK_URL` | Webhook（#3 才会用到） | 空 |
-| `OSH_ALERT_COOLDOWN` | 告警冷却 | `1h` |
+| `OSH_WEBHOOK_URL` | 告警 Webhook（HTTP POST JSON） | 空 |
+| `OSH_ALERT_COOLDOWN` | 同一目标同一故障的冷却时间 | `1h` |
+| `OSH_SMTP_HOST` | SMTP 主机（可选，与 Webhook 可并存） | 空 |
+| `OSH_SMTP_PORT` | SMTP 端口 | `587` |
+| `OSH_SMTP_USER` | SMTP 用户 | 空 |
+| `OSH_SMTP_PASSWORD` | SMTP 密码 | 空 |
+| `OSH_SMTP_FROM` | 发件人 | 空 |
+| `OSH_ALERT_TO` | 收件人 | 空 |
 
-配置文件里也可以写 SMTP 字段；告警投递要等 #3，现在不会发信。探测超时固定 10 秒；HTTPS 会跳过证书校验以便单独标出临期/过期，不把坏证书当成宕机。
+至少配置 Webhook 或 SMTP（`OSH_SMTP_HOST` + `OSH_ALERT_TO`）才会发告警。探测超时固定 10 秒；HTTPS 会跳过证书校验以便单独标出临期/过期，不把坏证书当成宕机。
 
 ## 仓库结构
 
@@ -102,13 +108,13 @@ internal/config/    配置（JSON + 环境变量）
 internal/httpapi/   HTTP：/、/healthz、/targets、/probes
 internal/targets/   监控目标存储（文件 JSON，后续可换 SQLite）         #1
 internal/probe/     定时探测（可用性 + 证书）与近期结果               #2
-internal/alert/     邮件/Webhook + 去重占位                            #3
+internal/alert/     邮件/Webhook + 冷却去重                             #3
 configs/            示例配置
 Dockerfile
 docker-compose.yml
 ```
 
-单进程、无外部数据库。目标列表落在 `data/targets.json`，近期探测记录落在 `data/probes.json`（每个目标最多保留 50 条）。
+单进程、无外部数据库。目标列表落在 `data/targets.json`，近期探测记录落在 `data/probes.json`（每个目标最多保留 50 条），最近一次告警落在 `data/alerts.json` 以便冷却跨重启仍生效。
 
 ### 目标 API
 
@@ -134,6 +140,12 @@ URL 必须是带 `http` / `https` 的绝对地址。缺 scheme、空字符串、
 
 约定：最终状态 2xx/3xx 为 `up`；超时、连接失败、4xx、5xx 为 `down`。证书状态与连通性分开：站点可达但证书 14 天内到期是 `up` + `warn`，证书已过期是 `up` + `expired`（探测时不因证书校验失败而当成宕机）。
 
+### 告警
+
+探测结果为 `down`、`cert_warn` 或 `cert_expired` 时投递一条通知；同一目标同一 `kind` 在冷却窗口内不再发。故障类型变化会立刻再发。曾告警的目标恢复为 `up`（证书 `ok` 或 `n/a`）时发一条 `recovered`，之后保持安静，直到再次故障。
+
+Webhook 请求是 JSON POST，字段包括 `target_id`、`url`、`kind`（`down` / `cert_warn` / `cert_expired` / `recovered`）、`message`。SMTP 主题和正文同样带目标与故障类型。
+
 ## 当前进度
 
 MVP 见 [Milestone: MVP](https://github.com/bugman666/open-site-health/milestone/1)：
@@ -141,7 +153,7 @@ MVP 见 [Milestone: MVP](https://github.com/bugman666/open-site-health/milestone
 - [x] 仓库骨架与可复现启动（本 README + Compose）
 - [x] 登记监控目标（[#1](https://github.com/bugman666/open-site-health/issues/1)）
 - [x] 定时探测（可用性 + 证书）（[#2](https://github.com/bugman666/open-site-health/issues/2)）
-- [ ] 告警（邮件或 Webhook + 去重）（[#3](https://github.com/bugman666/open-site-health/issues/3)）
+- [x] 告警（邮件或 Webhook + 去重）（[#3](https://github.com/bugman666/open-site-health/issues/3)）
 
 本项目免费、可自托管，不设付费墙。
 
