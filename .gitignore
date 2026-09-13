@@ -1,0 +1,8 @@
+/bin/
+/data/*.json
+/data/*.db
+/data/*.sqlite
+/data/*.sqlite-journal
+.env
+*.exe
+.DS_Store
