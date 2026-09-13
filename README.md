@@ -76,7 +76,7 @@ cd open-site-health
 make test          # 单元测试
 make run           # 默认监听 :8080
 # 或
-make smoke         # 编译后短时拉起并请求 /healthz
+make smoke         # 编译后短时拉起，检查 /healthz 和目标登记
 ```
 
 常用环境变量（覆盖 `configs/config.example.json`）：
