@@ -24,7 +24,7 @@ for _ in $(seq 1 50); do
     if grep -q '"status":"ok"' "${WORKDIR}/health.json"; then
       echo "smoke: /healthz ok"
       cat "${WORKDIR}/health.json"
-      exit 0
+      break
     fi
     echo "smoke: unexpected body:" >&2
     cat "${WORKDIR}/health.json" >&2
@@ -38,6 +38,29 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
-echo "smoke: timed out waiting for /healthz" >&2
-cat "${WORKDIR}/osh.log" >&2
-exit 1
+if [[ ! -f "${WORKDIR}/health.json" ]] || ! grep -q '"status":"ok"' "${WORKDIR}/health.json"; then
+  echo "smoke: timed out waiting for /healthz" >&2
+  cat "${WORKDIR}/osh.log" >&2
+  exit 1
+fi
+
+curl -fsS -X POST "http://127.0.0.1:${PORT}/targets" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.org/smoke"}' \
+  -o "${WORKDIR}/create.json"
+if ! grep -q 'https://example.org/smoke' "${WORKDIR}/create.json"; then
+  echo "smoke: create target failed:" >&2
+  cat "${WORKDIR}/create.json" >&2
+  exit 1
+fi
+
+curl -fsS "http://127.0.0.1:${PORT}/targets" -o "${WORKDIR}/list.json"
+if ! grep -q 'https://example.org/smoke' "${WORKDIR}/list.json"; then
+  echo "smoke: list missing created target:" >&2
+  cat "${WORKDIR}/list.json" >&2
+  exit 1
+fi
+
+echo "smoke: targets CRUD ok"
+cat "${WORKDIR}/list.json"
+exit 0

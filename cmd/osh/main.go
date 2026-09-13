@@ -1,8 +1,7 @@
 // Command osh is the Open Site Health process.
 //
-// This binary is a runnable skeleton: it loads config, opens a file-backed
-// target store, exposes /healthz, and parks probe/alert stubs until
-// issues #1–#3 are implemented.
+// It loads config, opens the file-backed target store, serves /healthz
+// and /targets, and parks probe/alert stubs until issues #2 and #3.
 package main
 
 import (

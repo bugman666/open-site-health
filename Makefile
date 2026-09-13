@@ -11,7 +11,7 @@ run:
 test:
 	go test ./...
 
-# Start the stub, hit /healthz, then stop. Used as a local compile + smoke check.
+# Start the process, hit /healthz and a create/list round-trip, then stop.
 smoke: build
 	@./scripts/smoke.sh
 
