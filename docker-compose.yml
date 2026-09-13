@@ -1,0 +1,25 @@
+services:
+  open-site-health:
+    build: .
+    image: open-site-health:local
+    container_name: open-site-health
+    ports:
+      - "8080:8080"
+    environment:
+      OSH_LISTEN: ":8080"
+      OSH_DATA_DIR: /data
+      # 5 minutes matches the documented 50–200 URL starting load.
+      OSH_PROBE_INTERVAL: "5m"
+      OSH_TLS_WARN_DAYS: "14"
+    volumes:
+      - osh-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  osh-data:

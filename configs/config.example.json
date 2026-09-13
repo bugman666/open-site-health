@@ -1,0 +1,15 @@
+{
+  "listen": ":8080",
+  "data_dir": "./data",
+  "probe_interval": "5m",
+  "tls_warn_days": 14,
+  "alert": {
+    "webhook_url": "",
+    "smtp_host": "",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_from": "",
+    "to": "",
+    "cooldown": "1h"
+  }
+}
