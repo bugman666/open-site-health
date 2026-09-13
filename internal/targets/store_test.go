@@ -110,6 +110,36 @@ func TestAddRejectsInvalidURL(t *testing.T) {
 	}
 }
 
+func TestAddRejectsBlockedDestination(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, raw := range []string{
+		"http://127.0.0.1/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.1.2.3/status",
+		"http://192.168.0.1/",
+		"http://localhost/",
+		"http://metadata.google.internal/",
+	} {
+		_, err := store.Add(raw)
+		if !errors.Is(err, ErrInvalidURL) {
+			t.Fatalf("Add(%q): want ErrInvalidURL, got %v", raw, err)
+		}
+	}
+
+	store.AllowPrivate = true
+	got, err := store.Add("http://127.0.0.1:9/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != "http://127.0.0.1:9/healthz" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 // TC1.3: the same URL after normalization is rejected; no second row.
 func TestAddRejectsDuplicateNormalizedURL(t *testing.T) {
 	store, err := Open(t.TempDir())

@@ -31,6 +31,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("targets: %v", err)
 	}
+	store.AllowPrivate = cfg.AllowPrivateTargets
+	if cfg.AllowPrivateTargets {
+		log.Printf("probe: private/link-local destinations are allowed")
+	}
 
 	results, err := probe.OpenResults(cfg.DataDir)
 	if err != nil {

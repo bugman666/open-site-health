@@ -28,6 +28,7 @@ func newTestEnv(t *testing.T) (*Server, *targets.Store, *probe.ResultStore) {
 		t.Fatal(err)
 	}
 	cfg := config.Defaults()
+	store.AllowPrivate = true
 	return New(cfg, store, results, alert.New(cfg)), store, results
 }
 
@@ -38,6 +39,11 @@ func newTestServer(t *testing.T) *Server {
 }
 
 func doJSON(t *testing.T, srv *Server, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	return doJSONAuth(t, srv, method, path, "", body)
+}
+
+func doJSONAuth(t *testing.T, srv *Server, method, path, token string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var rdr io.Reader
 	if body != nil {
@@ -50,6 +56,9 @@ func doJSON(t *testing.T, srv *Server, method, path string, body any) *httptest.
 	req := httptest.NewRequest(method, path, rdr)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -285,6 +294,7 @@ func TestListOrderIsReproducible(t *testing.T) {
 func TestProbeResultsQueryable(t *testing.T) {
 	srv, store, results := newTestEnv(t)
 	cfg := config.Defaults()
+	cfg.AllowPrivateTargets = true
 	sched := probe.New(cfg, store, results, alert.New(cfg))
 	sched.Timeout = time.Second
 
@@ -361,5 +371,101 @@ func TestProbeResultsQueryable(t *testing.T) {
 	missing := doJSON(t, srv, http.MethodGet, "/targets/does-not-exist/probes", nil)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing target: %d %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestCreateRejectsBlockedDestination(t *testing.T) {
+	srv, store, _ := newTestEnv(t)
+	store.AllowPrivate = false
+
+	for _, raw := range []string{
+		"http://127.0.0.1/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.8/",
+		"http://localhost/",
+	} {
+		rec := doJSON(t, srv, http.MethodPost, "/targets", map[string]string{"url": raw})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("url %q: status %d body %s", raw, rec.Code, rec.Body.String())
+		}
+	}
+
+	ok := doJSON(t, srv, http.MethodPost, "/targets", map[string]string{"url": "https://example.org"})
+	if ok.Code != http.StatusCreated {
+		t.Fatalf("public url: %d %s", ok.Code, ok.Body.String())
+	}
+}
+
+func newAuthedEnv(t *testing.T, token string) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := targets.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AllowPrivate = true
+	results, err := probe.OpenResults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.APIToken = token
+	return New(cfg, store, results, alert.New(cfg))
+}
+
+func TestAuthRequiredOnSensitiveRoutes(t *testing.T) {
+	const token = "test-token"
+	srv := newAuthedEnv(t, token)
+
+	health := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(healthRec, health)
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("healthz should stay public: %d", healthRec.Code)
+	}
+
+	root := httptest.NewRequest(http.MethodGet, "/", nil)
+	rootRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rootRec, root)
+	if rootRec.Code != http.StatusOK {
+		t.Fatalf("GET / should stay public: %d", rootRec.Code)
+	}
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodGet, "/targets", nil},
+		{http.MethodPost, "/targets", map[string]string{"url": "https://example.org"}},
+		{http.MethodGet, "/targets/abc", nil},
+		{http.MethodPut, "/targets/abc", map[string]string{"url": "https://example.net"}},
+		{http.MethodDelete, "/targets/abc", nil},
+		{http.MethodGet, "/probes", nil},
+		{http.MethodGet, "/targets/abc/probes", nil},
+		{http.MethodGet, "/targets/abc/status", nil},
+	} {
+		rec := doJSON(t, srv, tc.method, tc.path, tc.body)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s without token: %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	wrong := doJSONAuth(t, srv, http.MethodPost, "/targets", "nope", map[string]string{"url": "https://example.org"})
+	if wrong.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong bearer: %d %s", wrong.Code, wrong.Body.String())
+	}
+
+	created := doJSONAuth(t, srv, http.MethodPost, "/targets", token, map[string]string{"url": "https://example.org"})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("bearer create: %d %s", created.Code, created.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/targets", nil)
+	req.Header.Set("X-API-Key", token)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("X-API-Key list: %d %s", rec.Code, rec.Body.String())
 	}
 }

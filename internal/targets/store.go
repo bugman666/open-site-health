@@ -18,6 +18,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/bugman666/open-site-health/internal/safeurl"
 )
 
 const filename = "targets.json"
@@ -48,6 +50,9 @@ type filePayload struct {
 type Store struct {
 	path string
 	mu   sync.RWMutex
+	// AllowPrivate permits loopback / private / link-local URLs.
+	// The default is false (safe for a reachable listener).
+	AllowPrivate bool
 }
 
 // Open creates dataDir if needed and ensures an empty targets file exists.
@@ -109,6 +114,9 @@ func (s *Store) Add(rawURL string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
+	if err := s.checkDestination(normalized); err != nil {
+		return Target{}, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -149,6 +157,9 @@ func (s *Store) Update(id, rawURL string) (Target, error) {
 	}
 	normalized, err := normalizeURL(rawURL)
 	if err != nil {
+		return Target{}, err
+	}
+	if err := s.checkDestination(normalized); err != nil {
 		return Target{}, err
 	}
 
@@ -209,6 +220,13 @@ func (s *Store) Delete(id string) error {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	return s.saveLocked(kept)
+}
+
+func (s *Store) checkDestination(normalized string) error {
+	if err := safeurl.Validate(normalized, s.AllowPrivate); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidURL, err)
+	}
+	return nil
 }
 
 func (s *Store) loadLocked() ([]Target, error) {

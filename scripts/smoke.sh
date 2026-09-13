@@ -17,6 +17,9 @@ export OSH_LISTEN="127.0.0.1:${PORT}"
 export OSH_DATA_DIR="${WORKDIR}/data"
 export OSH_CONFIG="${ROOT}/configs/config.example.json"
 export OSH_PROBE_INTERVAL="200ms"
+export OSH_API_TOKEN="smoke-test-token"
+# Probe the process's own /healthz on loopback.
+export OSH_ALLOW_PRIVATE_TARGETS="true"
 
 "${BIN}" >"${WORKDIR}/osh.log" 2>&1 &
 PID=$!
@@ -46,7 +49,21 @@ if [[ ! -f "${WORKDIR}/health.json" ]] || ! grep -q '"status":"ok"' "${WORKDIR}/
   exit 1
 fi
 
+UNAUTH_CODE="$(curl -sS -o "${WORKDIR}/unauth.json" -w '%{http_code}' \
+  -X POST "http://127.0.0.1:${PORT}/targets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"url\":\"http://127.0.0.1:${PORT}/healthz\"}")"
+if [[ "${UNAUTH_CODE}" != "401" ]]; then
+  echo "smoke: expected 401 without token, got ${UNAUTH_CODE}:" >&2
+  cat "${WORKDIR}/unauth.json" >&2
+  exit 1
+fi
+echo "smoke: unauthenticated write rejected"
+
+AUTH=(-H "Authorization: Bearer ${OSH_API_TOKEN}")
+
 curl -fsS -X POST "http://127.0.0.1:${PORT}/targets" \
+  "${AUTH[@]}" \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://127.0.0.1:${PORT}/healthz\"}" \
   -o "${WORKDIR}/create.json"
@@ -56,7 +73,7 @@ if ! grep -q "/healthz" "${WORKDIR}/create.json"; then
   exit 1
 fi
 
-curl -fsS "http://127.0.0.1:${PORT}/targets" -o "${WORKDIR}/list.json"
+curl -fsS "${AUTH[@]}" "http://127.0.0.1:${PORT}/targets" -o "${WORKDIR}/list.json"
 if ! grep -q "/healthz" "${WORKDIR}/list.json"; then
   echo "smoke: list missing created target:" >&2
   cat "${WORKDIR}/list.json" >&2
@@ -74,7 +91,7 @@ if [[ -z "${ID}" ]]; then
 fi
 PROBE_OK=0
 for _ in $(seq 1 40); do
-  if curl -fsS "http://127.0.0.1:${PORT}/targets/${ID}/probes" -o "${WORKDIR}/probes.json"; then
+  if curl -fsS "${AUTH[@]}" "http://127.0.0.1:${PORT}/targets/${ID}/probes" -o "${WORKDIR}/probes.json"; then
     if grep -q '"availability":"up"' "${WORKDIR}/probes.json" && grep -q '"cert_status":"n/a"' "${WORKDIR}/probes.json" && grep -q '"checked_at"' "${WORKDIR}/probes.json"; then
       PROBE_OK=1
       break
