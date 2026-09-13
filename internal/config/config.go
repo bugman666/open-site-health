@@ -18,9 +18,9 @@ const (
 	DefaultSMTPPort      = 587
 )
 
-// Config is the runtime configuration for the stub service.
-// Probe and alert fields are accepted now so later work on #2 / #3
-// can fill them in without reshaping the file.
+// Config is the runtime configuration for the service.
+// Alert fields are accepted now so #3 can fill them in without
+// reshaping the file.
 type Config struct {
 	Listen        string
 	DataDir       string

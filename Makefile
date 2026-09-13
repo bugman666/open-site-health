@@ -11,7 +11,7 @@ run:
 test:
 	go test ./...
 
-# Start the process, hit /healthz and a create/list round-trip, then stop.
+# Start the process, hit /healthz, create/list a target, wait for a probe.
 smoke: build
 	@./scripts/smoke.sh
 

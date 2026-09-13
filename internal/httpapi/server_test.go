@@ -2,25 +2,39 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bugman666/open-site-health/internal/alert"
 	"github.com/bugman666/open-site-health/internal/config"
+	"github.com/bugman666/open-site-health/internal/probe"
 	"github.com/bugman666/open-site-health/internal/targets"
 )
 
-func newTestServer(t *testing.T) *Server {
+func newTestEnv(t *testing.T) (*Server, *targets.Store, *probe.ResultStore) {
 	t.Helper()
-	store, err := targets.Open(t.TempDir())
+	dir := t.TempDir()
+	store, err := targets.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := probe.OpenResults(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Defaults()
-	return New(cfg, store, alert.New(cfg))
+	return New(cfg, store, results, alert.New(cfg)), store, results
+}
+
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	srv, _, _ := newTestEnv(t)
+	return srv
 }
 
 func doJSON(t *testing.T, srv *Server, method, path string, body any) *httptest.ResponseRecorder {
@@ -59,7 +73,7 @@ func TestHealthzOK(t *testing.T) {
 	if body.Status != "ok" || body.Service != "open-site-health" {
 		t.Fatalf("body: %#v", body)
 	}
-	if body.Modules["targets"] != "ok" || body.Modules["probe"] != "stub" {
+	if body.Modules["targets"] != "ok" || body.Modules["probe"] != "ok" {
 		t.Fatalf("modules: %#v", body.Modules)
 	}
 }
@@ -231,5 +245,89 @@ func TestListOrderIsReproducible(t *testing.T) {
 		if listed.Targets[i].URL != u {
 			t.Fatalf("index %d: got %s want %s", i, listed.Targets[i].URL, u)
 		}
+	}
+}
+
+// TC2.6: after probes have run, history and latest status expose time,
+// availability, and certificate fields.
+func TestProbeResultsQueryable(t *testing.T) {
+	srv, store, results := newTestEnv(t)
+	cfg := config.Defaults()
+	sched := probe.New(cfg, store, results, alert.New(cfg))
+	sched.Timeout = time.Second
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	create := doJSON(t, srv, http.MethodPost, "/targets", map[string]string{"url": upstream.URL})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", create.Code, create.Body.String())
+	}
+	var created targets.Target
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyStatus := doJSON(t, srv, http.MethodGet, "/targets/"+created.ID+"/status", nil)
+	if emptyStatus.Code != http.StatusNotFound {
+		t.Fatalf("status before probe: %d %s", emptyStatus.Code, emptyStatus.Body.String())
+	}
+
+	if err := sched.CheckAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.CheckAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	hist := doJSON(t, srv, http.MethodGet, "/targets/"+created.ID+"/probes", nil)
+	if hist.Code != http.StatusOK {
+		t.Fatalf("history: %d %s", hist.Code, hist.Body.String())
+	}
+	var listed probeListResponse
+	if err := json.Unmarshal(hist.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Results) < 2 {
+		t.Fatalf("expected at least two results, got %#v", listed)
+	}
+	for _, r := range listed.Results {
+		if r.CheckedAt.IsZero() || r.Availability == "" || r.CertStatus == "" {
+			t.Fatalf("missing fields: %#v", r)
+		}
+		if r.Availability != probe.Up {
+			t.Fatalf("availability: %s", r.Availability)
+		}
+		if r.CertStatus != probe.CertNA {
+			t.Fatalf("http cert: %s", r.CertStatus)
+		}
+		if r.TargetID != created.ID {
+			t.Fatalf("target id: %s", r.TargetID)
+		}
+	}
+
+	statusRec := doJSON(t, srv, http.MethodGet, "/targets/"+created.ID+"/status", nil)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("status: %d %s", statusRec.Code, statusRec.Body.String())
+	}
+	var latest probe.Result
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest.ID != listed.Results[0].ID {
+		t.Fatalf("status should be newest history row: %#v vs %#v", latest, listed.Results[0])
+	}
+
+	global := doJSON(t, srv, http.MethodGet, "/probes?target_id="+created.ID, nil)
+	if global.Code != http.StatusOK {
+		t.Fatalf("global: %d %s", global.Code, global.Body.String())
+	}
+
+	missing := doJSON(t, srv, http.MethodGet, "/targets/does-not-exist/probes", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing target: %d %s", missing.Code, missing.Body.String())
 	}
 }
