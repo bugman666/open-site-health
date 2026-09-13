@@ -1,8 +1,7 @@
 // Command osh is the Open Site Health process.
 //
-// It loads config, opens the file-backed target and probe stores, serves
-// /healthz, /targets and /probes, and runs the probe scheduler. Alert
-// delivery stays a stub until issue #3.
+// It loads config, opens the file-backed target, probe and alert stores,
+// serves /healthz, /targets and /probes, and runs the probe scheduler.
 package main
 
 import (
@@ -38,8 +37,11 @@ func main() {
 		log.Fatalf("probes: %v", err)
 	}
 
-	alerts := alert.New(cfg)
-	alerts.LogStub()
+	alerts, err := alert.Open(cfg)
+	if err != nil {
+		log.Fatalf("alerts: %v", err)
+	}
+	alerts.LogReady()
 
 	scheduler := probe.New(cfg, store, results, alerts)
 

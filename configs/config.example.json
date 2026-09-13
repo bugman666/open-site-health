@@ -8,6 +8,7 @@
     "smtp_host": "",
     "smtp_port": 587,
     "smtp_user": "",
+    "smtp_password": "",
     "smtp_from": "",
     "to": "",
     "cooldown": "1h"

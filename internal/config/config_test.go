@@ -41,6 +41,9 @@ func TestLoadFileAndEnvOverride(t *testing.T) {
 	t.Setenv("OSH_TLS_WARN_DAYS", "")
 	t.Setenv("OSH_WEBHOOK_URL", "")
 	t.Setenv("OSH_ALERT_COOLDOWN", "")
+	t.Setenv("OSH_SMTP_HOST", "")
+	t.Setenv("OSH_SMTP_PASSWORD", "")
+	t.Setenv("OSH_ALERT_TO", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -60,6 +63,40 @@ func TestLoadFileAndEnvOverride(t *testing.T) {
 	}
 	if cfg.Alert.Cooldown != 30*time.Minute {
 		t.Fatalf("cooldown: got %s", cfg.Alert.Cooldown)
+	}
+}
+
+func TestAlertEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"listen":":8080","data_dir":"`+dir+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OSH_CONFIG", path)
+	t.Setenv("OSH_WEBHOOK_URL", "http://127.0.0.1:9/hook")
+	t.Setenv("OSH_ALERT_COOLDOWN", "15m")
+	t.Setenv("OSH_SMTP_HOST", "smtp.example.org")
+	t.Setenv("OSH_SMTP_PORT", "2525")
+	t.Setenv("OSH_SMTP_USER", "osh")
+	t.Setenv("OSH_SMTP_PASSWORD", "secret")
+	t.Setenv("OSH_SMTP_FROM", "osh@example.org")
+	t.Setenv("OSH_ALERT_TO", "ops@example.org")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Alert.WebhookURL != "http://127.0.0.1:9/hook" {
+		t.Fatalf("webhook: %s", cfg.Alert.WebhookURL)
+	}
+	if cfg.Alert.Cooldown != 15*time.Minute {
+		t.Fatalf("cooldown: %s", cfg.Alert.Cooldown)
+	}
+	if cfg.Alert.SMTPHost != "smtp.example.org" || cfg.Alert.SMTPPort != 2525 {
+		t.Fatalf("smtp: %s:%d", cfg.Alert.SMTPHost, cfg.Alert.SMTPPort)
+	}
+	if cfg.Alert.SMTPPass != "secret" || cfg.Alert.To != "ops@example.org" {
+		t.Fatalf("smtp creds: user=%s to=%s", cfg.Alert.SMTPUser, cfg.Alert.To)
 	}
 }
 

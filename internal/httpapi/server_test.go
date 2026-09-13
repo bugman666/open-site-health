@@ -76,6 +76,38 @@ func TestHealthzOK(t *testing.T) {
 	if body.Modules["targets"] != "ok" || body.Modules["probe"] != "ok" {
 		t.Fatalf("modules: %#v", body.Modules)
 	}
+	if body.Modules["alert"] != "disabled" {
+		t.Fatalf("alert without channel: %#v", body.Modules)
+	}
+}
+
+func TestHealthzAlertReady(t *testing.T) {
+	dir := t.TempDir()
+	store, err := targets.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := probe.OpenResults(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Alert.WebhookURL = "http://127.0.0.1:9/hook"
+	srv := New(cfg, store, results, alert.New(cfg))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	var body healthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Modules["alert"] != "ok" {
+		t.Fatalf("alert: %#v", body.Modules)
+	}
 }
 
 func TestRoot(t *testing.T) {

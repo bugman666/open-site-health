@@ -1,8 +1,8 @@
 // Package probe runs scheduled HTTP(S) availability and TLS expiry checks.
 //
 // Each pass lists registered targets, records up/down independently of
-// certificate ok/warn/expired, and keeps a recent result history so the
-// HTTP API can query it. Notifications stay with the alert stub (#3).
+// certificate ok/warn/expired, keeps a recent result history, and hands
+// faults (and recovery) to the alert dispatcher.
 package probe
 
 import (
@@ -120,24 +120,27 @@ func (s *Scheduler) maybeNotify(ctx context.Context, r Result) {
 	if s.alerts == nil {
 		return
 	}
-	var kind alert.Kind
-	switch {
-	case r.Availability == Down:
-		kind = alert.KindDown
-	case r.CertStatus == CertExpired:
-		kind = alert.KindCertExpired
-	case r.CertStatus == CertWarn:
-		kind = alert.KindCertWarn
-	default:
-		return
-	}
 	ev := alert.Event{
 		TargetID: r.TargetID,
 		URL:      r.URL,
-		Kind:     kind,
 		Message:  r.Message,
 	}
-	if err := s.alerts.Notify(ctx, ev); err != nil && !errors.Is(err, alert.ErrNotImplemented) {
+	switch {
+	case r.Availability == Down:
+		ev.Kind = alert.KindDown
+	case r.CertStatus == CertExpired:
+		ev.Kind = alert.KindCertExpired
+	case r.CertStatus == CertWarn:
+		ev.Kind = alert.KindCertWarn
+	case r.Availability == Up:
+		ev.Kind = alert.KindRecovered
+		if ev.Message == "" {
+			ev.Message = "target recovered"
+		}
+	default:
+		return
+	}
+	if err := s.alerts.Notify(ctx, ev); err != nil {
 		log.Printf("probe: alert: %v", err)
 	}
 }
