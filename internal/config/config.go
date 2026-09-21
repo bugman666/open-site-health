@@ -256,9 +256,22 @@ func (c Config) Validate() error {
 		return fmt.Errorf("alert.cooldown must be >= 0")
 	}
 	if strings.TrimSpace(c.APIToken) == "" && !ListenIsLoopback(c.Listen) {
-		return fmt.Errorf("api_token is required unless listen is loopback (127.0.0.1 / ::1 / localhost); set OSH_API_TOKEN or bind to localhost")
+		return fmt.Errorf("%s", APITokenRequiredMessage(c.Listen))
 	}
 	return nil
+}
+
+// APITokenRequiredMessage is the process-startup error when listen is
+// not loopback and no token is set. Plain language (en + zh) so a
+// missing Compose/env token is actionable.
+func APITokenRequiredMessage(listen string) string {
+	return fmt.Sprintf(
+		"OSH_API_TOKEN is required because listen %q is not loopback (127.0.0.1 / ::1 / localhost). "+
+			"监听地址不是本机回环，必须设置共享 token 后才能启动。"+
+			" Generate one: export OSH_API_TOKEN=$(openssl rand -hex 16)"+
+			" — or bind OSH_LISTEN to 127.0.0.1:8080.",
+		listen,
+	)
 }
 
 // ListenIsLoopback reports whether addr only accepts local clients.

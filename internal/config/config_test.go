@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,8 +122,17 @@ func TestValidateRequiresTokenForNonLoopback(t *testing.T) {
 	cfg := Defaults()
 	cfg.Listen = ":8080"
 	cfg.APIToken = ""
-	if err := cfg.Validate(); err == nil {
+	err := cfg.Validate()
+	if err == nil {
 		t.Fatal("wide listen without token should fail")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "OSH_API_TOKEN") || !strings.Contains(msg, "export OSH_API_TOKEN=") {
+		t.Fatalf("error should tell the operator how to set a token: %s", msg)
+	}
+	if !strings.Contains(msg, "监听") || !strings.Contains(msg, ":8080") {
+		t.Fatalf("error should name the listen address in plain language: %s", msg)
 	}
 
 	cfg.APIToken = "secret"
@@ -200,7 +211,57 @@ func TestLoadRejectsWideListenWithoutToken(t *testing.T) {
 	t.Setenv("OSH_CONFIG", path)
 	t.Setenv("OSH_LISTEN", "")
 	t.Setenv("OSH_API_TOKEN", "")
-	if _, err := Load(); err == nil {
+	_, err := Load()
+	if err == nil {
 		t.Fatal("expected error")
 	}
+	if !strings.Contains(err.Error(), "OSH_API_TOKEN") || !strings.Contains(err.Error(), "export OSH_API_TOKEN=") {
+		t.Fatalf("load error should be actionable: %v", err)
+	}
+}
+
+func TestComposeUpScriptFriendlyTokenError(t *testing.T) {
+	root := findRepoRoot(t)
+	script := filepath.Join(root, "scripts", "compose-up.sh")
+	cmd := exec.Command("bash", script)
+	cmd.Dir = root
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"OSH_API_TOKEN=",
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("missing token should fail before docker compose")
+	}
+	text := string(out)
+	if !strings.Contains(text, "export OSH_API_TOKEN=$(openssl rand -hex 16)") {
+		t.Fatalf("expected openssl hint, got:\n%s", text)
+	}
+	if !strings.Contains(text, "未设置 OSH_API_TOKEN") {
+		t.Fatalf("expected zh hint, got:\n%s", text)
+	}
+	if strings.Contains(text, "required variable") || strings.Contains(text, "interpolat") {
+		t.Fatalf("should not dump compose interpolation error:\n%s", text)
+	}
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
+			return wd
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			break
+		}
+		wd = parent
+	}
+	t.Fatal("go.mod not found")
+	return ""
 }

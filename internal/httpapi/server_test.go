@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,22 @@ func TestRoot(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d", rec.Code)
+	}
+	var body rootResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Service != "open-site-health" || body.Health != "/healthz" || body.Targets != "/targets" || body.Probes != "/probes" {
+		t.Fatalf("body: %#v", body)
+	}
+	if body.Hint != RootHint {
+		t.Fatalf("hint: %q", body.Hint)
+	}
+	if !strings.Contains(body.Hint, "POST /targets") || !strings.Contains(body.Hint, "GET /probes") || !strings.Contains(body.Hint, "Bearer") {
+		t.Fatalf("hint should point at README curl steps: %q", body.Hint)
+	}
+	if strings.Contains(body.Hint, "test-token") || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatal("GET / must stay anonymous and not echo secrets")
 	}
 }
 
@@ -429,6 +446,12 @@ func TestAuthRequiredOnSensitiveRoutes(t *testing.T) {
 	srv.Handler().ServeHTTP(rootRec, root)
 	if rootRec.Code != http.StatusOK {
 		t.Fatalf("GET / should stay public: %d", rootRec.Code)
+	}
+	if !strings.Contains(rootRec.Body.String(), `"hint"`) {
+		t.Fatalf("GET / should include a next-step hint: %s", rootRec.Body.String())
+	}
+	if strings.Contains(rootRec.Body.String(), token) {
+		t.Fatal("GET / must not echo the API token")
 	}
 
 	for _, tc := range []struct {
