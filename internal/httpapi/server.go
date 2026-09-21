@@ -129,6 +129,19 @@ type healthResponse struct {
 	Store   string            `json:"store"`
 }
 
+type rootResponse struct {
+	Service string `json:"service"`
+	Health  string `json:"health"`
+	Targets string `json:"targets"`
+	Probes  string `json:"probes"`
+	Docs    string `json:"docs"`
+	Hint    string `json:"hint"`
+}
+
+// rootHint tells a first-time visitor this is an API and which curls to run next.
+// Do not interpolate the configured token: GET / is public.
+const rootHint = "这是 HTTP API，没有网页后台。下一步：curl GET /healthz 应看到 ok；用 Authorization: Bearer 令牌 POST /targets 登记 URL；再 GET /probes 查看探测结果（首轮探测完成前列表为空是正常的）。"
+
 type errorBody struct {
 	Error string `json:"error"`
 }
@@ -187,12 +200,13 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"service": "open-site-health",
-		"health":  "/healthz",
-		"targets": "/targets",
-		"probes":  "/probes",
-		"docs":    "https://github.com/bugman666/open-site-health",
+	writeJSON(w, http.StatusOK, rootResponse{
+		Service: "open-site-health",
+		Health:  "/healthz",
+		Targets: "/targets",
+		Probes:  "/probes",
+		Docs:    "https://github.com/bugman666/open-site-health",
+		Hint:    rootHint,
 	})
 }
 

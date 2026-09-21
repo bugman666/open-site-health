@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,51 @@ func TestRoot(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: %d", rec.Code)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Fatalf("content-type: %s", ct)
+	}
+	var body rootResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json: %v body %s", err, rec.Body.String())
+	}
+	if body.Service != "open-site-health" || body.Health != "/healthz" || body.Targets != "/targets" || body.Probes != "/probes" {
+		t.Fatalf("catalog: %#v", body)
+	}
+	if body.Hint == "" {
+		t.Fatal("missing Chinese next-step hint")
+	}
+	for _, want := range []string{"HTTP API", "/healthz", "/targets", "/probes", "Bearer", "没有网页后台", "下一步"} {
+		if !strings.Contains(body.Hint, want) {
+			t.Fatalf("hint missing %q: %s", want, body.Hint)
+		}
+	}
+	if strings.Contains(body.Hint, srv.cfg.APIToken) && srv.cfg.APIToken != "" {
+		t.Fatal("hint must not echo the API token")
+	}
+}
+
+func TestRootHintDoesNotEchoToken(t *testing.T) {
+	const token = "super-secret-token-value"
+	srv := newAuthedEnv(t, token)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	raw := rec.Body.String()
+	if strings.Contains(raw, token) {
+		t.Fatalf("GET / leaked token: %s", raw)
+	}
+	var body rootResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Hint, "Bearer") || !strings.Contains(body.Hint, "下一步") {
+		t.Fatalf("hint: %s", body.Hint)
 	}
 }
 

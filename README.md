@@ -6,11 +6,9 @@
 
 ## 它做什么
 
-1. 登记要监控的 URL
-2. 按周期探测可用性，并检查 HTTPS 证书过期时间
-3. 异常时通过邮件或 Webhook 通知（带去重，避免同一故障刷屏）
-
-当前可以登记监控 URL、按周期探测可用性与证书，并在宕机或证书异常时发 Webhook / 邮件（带冷却去重）（[#1](https://github.com/bugman666/open-site-health/issues/1)、[#2](https://github.com/bugman666/open-site-health/issues/2)、[#3](https://github.com/bugman666/open-site-health/issues/3)）。
+1. 登记要监控的 URL（[#1](https://github.com/bugman666/open-site-health/issues/1)）
+2. 按周期探测可用性，并检查 HTTPS 证书过期时间（[#2](https://github.com/bugman666/open-site-health/issues/2)）
+3. 异常时通过邮件或 Webhook 通知（带去重，避免同一故障刷屏）（[#3](https://github.com/bugman666/open-site-health/issues/3)）
 
 ## 谁会用
 
@@ -41,6 +39,29 @@
 ## 如何运行
 
 依赖：Docker Compose **或** Go 1.22+。不需要商业托管账号。
+
+服务起来后，用这三步确认主路径通了（Compose 必须先 `export OSH_API_TOKEN=...`）。本机 `make run` 在 loopback 上可以不设 token，但建议设上，下面命令一律带 Bearer。
+
+1. **探活**：`GET /healthz` 应返回 `"status":"ok"`。
+
+   ```bash
+   curl -sS http://127.0.0.1:8080/healthz
+   ```
+
+2. **登记 URL**：`POST /targets`，带 `Authorization: Bearer $OSH_API_TOKEN`。
+
+   ```bash
+   curl -sS -X POST http://127.0.0.1:8080/targets \
+     -H "Authorization: Bearer ${OSH_API_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     -d '{"url":"https://example.org"}'
+   ```
+
+3. **看探测结果**：`GET /probes`（同样带 Bearer）。还没跑完一轮 `OSH_PROBE_INTERVAL`（默认 5 分钟）时，列表为空是正常的。
+
+   ```bash
+   curl -sS -H "Authorization: Bearer ${OSH_API_TOKEN}" http://127.0.0.1:8080/probes
+   ```
 
 ### Docker Compose（推荐）
 
