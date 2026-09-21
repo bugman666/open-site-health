@@ -16,7 +16,7 @@ smoke: build
 	@./scripts/smoke.sh
 
 compose-up:
-	docker compose up --build -d
+	@./scripts/compose-up.sh
 
 compose-down:
 	docker compose down

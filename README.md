@@ -4,6 +4,8 @@
 
 适合没有专职运维、又不能让捐赠入口或报名页静默挂掉的小团队。本仓库只做自托管，核心功能不设付费墙。
 
+**当前是自托管 HTTP API，没有网页后台。** 用 curl / 脚本操作；浏览器打开 `http://127.0.0.1:8080/` 只会看到 JSON（含一小段下一步 `hint`），不是仪表盘。
+
 ## 它做什么
 
 1. 登记要监控的 URL
@@ -42,17 +44,28 @@
 
 依赖：Docker Compose **或** Go 1.22+。不需要商业托管账号。
 
+> **成功判据** — 按这个顺序确认已经走通（Compose 与本地 Go 相同）：
+>
+> 1. `curl -sS http://127.0.0.1:8080/healthz` → `"status":"ok"`
+> 2. `POST /targets` 带 `Authorization: Bearer ${OSH_API_TOKEN}` → `201`
+> 3. `GET /probes` 带同样 Bearer → 列表非空（刚登记可能要等一轮 `OSH_PROBE_INTERVAL`，默认 5 分钟）
+
 ### Docker Compose（推荐）
 
 ```bash
 git clone https://github.com/bugman666/open-site-health.git
 cd open-site-health
 export OSH_API_TOKEN="$(openssl rand -hex 16)"
-docker compose up --build -d
+./scripts/compose-up.sh
+# 或：make compose-up
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
-Compose 把容器端口发到本机 `127.0.0.1:8080`，并且**必须**设置 `OSH_API_TOKEN`（容器内监听 `:8080`，没有 token 进程会拒绝启动）。看到 `"status":"ok"` 即表示服务已起来。数据目录挂在 named volume `osh-data`。登记目标后，进程会按 `OSH_PROBE_INTERVAL`（默认 5 分钟）探测；也可立刻查历史（还没跑完一轮则列表为空）：
+未设置 `OSH_API_TOKEN` 时，`./scripts/compose-up.sh` / `make compose-up` 会用中英对照说明如何 `export OSH_API_TOKEN=$(openssl rand -hex 16)` 后再跑。不要跳过 token：容器内监听 `:8080`，没有 token 进程会拒绝启动。直接跑 `docker compose up` 也会因缺变量失败。
+
+> **告警不会自动有。** 未设置 `OSH_WEBHOOK_URL`，也未设置 SMTP（`OSH_SMTP_HOST` + `OSH_ALERT_TO`）时，服务**只保存探测结果**，**不会**发通知。要「挂了找你」，至少配一种，例如 `export OSH_WEBHOOK_URL=https://webhook.site/<your-id>` 后再 compose up。
+
+Compose 把容器端口发到本机 `127.0.0.1:8080`。看到 `"status":"ok"` 即表示服务已起来。数据目录挂在 named volume `osh-data`。登记目标后，进程会按 `OSH_PROBE_INTERVAL`（默认 5 分钟）探测；也可立刻查历史（还没跑完一轮则列表为空）：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/targets \
@@ -77,7 +90,7 @@ docker compose down
 git clone https://github.com/bugman666/open-site-health.git
 cd open-site-health
 make test          # 单元测试
-make run           # 默认监听 127.0.0.1:8080
+make run           # 默认监听 127.0.0.1:8080（loopback 可省略 token；Compose 不行）
 # 或
 make smoke         # 编译后短时拉起，检查 /healthz、目标登记和一轮探测
 ```

@@ -14,7 +14,9 @@ services:
       # 5 minutes matches the documented 50–200 URL starting load.
       OSH_PROBE_INTERVAL: "5m"
       OSH_TLS_WARN_DAYS: "14"
-      OSH_API_TOKEN: ${OSH_API_TOKEN:?set OSH_API_TOKEN before compose up; see README}
+      # Still required (container listen is :8080). Prefer ./scripts/compose-up.sh
+      # so a missing token prints a zh+en hint instead of this interpolation.
+      OSH_API_TOKEN: ${OSH_API_TOKEN:?set OSH_API_TOKEN first, then rerun; or use ./scripts/compose-up.sh}
     volumes:
       - osh-data:/data
     restart: unless-stopped

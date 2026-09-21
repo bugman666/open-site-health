@@ -182,17 +182,30 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// RootHint is the anonymous next-step text on GET /. Chinese, no secrets.
+const RootHint = "当前是 HTTP API，没有网页后台。请先 GET /healthz 确认服务可用；再用 Authorization: Bearer <OSH_API_TOKEN> 调用 POST /targets 登记 URL；然后 GET /probes 查看探测结果。完整命令见 README。"
+
+type rootResponse struct {
+	Service string `json:"service"`
+	Health  string `json:"health"`
+	Targets string `json:"targets"`
+	Probes  string `json:"probes"`
+	Docs    string `json:"docs"`
+	Hint    string `json:"hint"`
+}
+
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"service": "open-site-health",
-		"health":  "/healthz",
-		"targets": "/targets",
-		"probes":  "/probes",
-		"docs":    "https://github.com/bugman666/open-site-health",
+	writeJSON(w, http.StatusOK, rootResponse{
+		Service: "open-site-health",
+		Health:  "/healthz",
+		Targets: "/targets",
+		Probes:  "/probes",
+		Docs:    "https://github.com/bugman666/open-site-health",
+		Hint:    RootHint,
 	})
 }
 
